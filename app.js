@@ -1,281 +1,152 @@
-/* FleetVault – Multi-User Web App (Supabase + GitHub Pages)
-   FINAL STABLE VERSION
-*/
+// FleetVault – "unkaputtbar": zeigt Fehler direkt auf der Seite
 
-const $ = (s) => document.querySelector(s);
-
-/* ================= SUPABASE ================= */
-const SUPABASE_URL = "https://sikhqmzpcdwwdywaejwl.supabase.co";
-const SUPABASE_ANON_KEY =
-  "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpa2hxbXpwY2R3d2R5d2FlandsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5OTA0ODgsImV4cCI6MjA4NDU2NjQ4OH0.rabK9l74yjAzJ4flMwE0_AasVu_3cth3g-FRNo4JCuM";
-
-/* sichere Initialisierung */
-if (!window.supabase) {
-  document.getElementById("app").innerHTML =
-    "<div style='color:white;padding:24px'>Supabase SDK nicht geladen</div>";
-  throw new Error("Supabase SDK missing");
-}
-
-const supabase = window.supabase.createClient(
-  SUPABASE_URL,
-  SUPABASE_ANON_KEY
-);
-
-/* ================= STATE ================= */
-let user = null;
-let vehicles = [];
-let todos = [];
-let activity = [];
-
-/* ================= HELPERS ================= */
-const eur = (n) =>
-  Number(n || 0).toLocaleString("de-DE", {
-    style: "currency",
-    currency: "EUR",
-  });
-
-const today = () => new Date().toISOString().slice(0, 10);
-
-const esc = (s) =>
-  String(s ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;");
-
-/* ================= ROUTING ================= */
-window.addEventListener("hashchange", render);
-
-async function render() {
-  const route = location.hash.replace("#/", "");
-  if (!user) return renderLogin();
-  if (route.startsWith("vehicle/")) {
-    return renderVehicle(route.split("/")[1]);
+(() => {
+  const appEl = document.getElementById("app");
+  if (!appEl) {
+    document.body.innerHTML =
+      "<div style='padding:24px;font-family:system-ui'>Fehler: #app fehlt in index.html</div>";
+    return;
   }
-  if (route === "vehicles") return renderVehicles();
-  return renderDashboard();
-}
 
-/* ================= AUTH ================= */
-async function initAuth() {
-  const { data } = await supabase.auth.getSession();
-  user = data.session?.user || null;
+  // On-page error overlay
+  function showError(title, msg) {
+    appEl.innerHTML = `
+      <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px">
+        <div style="max-width:720px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
+          <div style="font-weight:900;font-size:18px;margin-bottom:8px;color:#ff6b8a">${title}</div>
+          <div style="white-space:pre-wrap;line-height:1.4;opacity:.9">${msg}</div>
+        </div>
+      </div>`;
+  }
 
-  supabase.auth.onAuthStateChange((_e, session) => {
-    user = session?.user || null;
-    render();
-  });
+  window.addEventListener("error", (e) => showError("JS Fehler", e.message || "unknown"));
+  window.addEventListener("unhandledrejection", (e) =>
+    showError("Promise Fehler", (e.reason && (e.reason.message || String(e.reason))) || "unknown")
+  );
 
-  render();
-}
+  // Quick "loading" screen so it's never blank
+  appEl.innerHTML = `
+    <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px">
+      <div style="max-width:520px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
+        <div style="font-weight:900;font-size:18px;margin-bottom:6px">FleetVault</div>
+        <div style="opacity:.75">Lade…</div>
+      </div>
+    </div>`;
 
-async function login() {
-  const email = $("#email").value;
-  const password = $("#password").value;
+  // ===== Supabase config =====
+  const SUPABASE_URL = "https://sikhqmzpcdwwdywaejwl.supabase.co";
+  const SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpa2hxbXpwY2R3d2R5d2FlandsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5OTA0ODgsImV4cCI6MjA4NDU2NjQ4OH0.rabK9l74yjAzJ4flMwE0_AasVu_3cth3g-FRNo4JCuM";
 
-  const { error } = await supabase.auth.signInWithPassword({
-    email,
-    password,
-  });
-  if (error) alert(error.message);
-}
+  // Check that Supabase SDK exists
+  if (!window.supabase || !window.supabase.createClient) {
+    showError(
+      "Supabase SDK fehlt",
+      "Die Supabase-Library wurde nicht geladen.\n\nFix:\nIn index.html MUSS VOR app.js stehen:\n<script src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2\"></script>\n<script src=\"app.js\"></script>"
+    );
+    return;
+  }
 
-async function signup() {
-  const email = $("#email").value;
-  const password = $("#password").value;
+  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
-  const { error } = await supabase.auth.signUp({
-    email,
-    password,
-  });
-  if (error) alert(error.message);
-  else alert("Account erstellt – jetzt einloggen");
-}
+  // Helpers
+  const esc = (s) =>
+    String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;");
 
-async function logout() {
-  await supabase.auth.signOut();
-}
+  // Render Login
+  function renderLogin(infoText = "") {
+    appEl.innerHTML = `
+      <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px;display:flex;align-items:center;justify-content:center">
+        <div style="width:min(480px,100%);border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
+          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
+            <div style="width:34px;height:34px;border-radius:14px;background:linear-gradient(135deg, rgba(100,166,255,.55), rgba(102,255,176,.35));box-shadow:0 12px 28px rgba(0,0,0,.35)"></div>
+            <div>
+              <div style="font-weight:900;font-size:16px">FleetVault</div>
+              <div style="opacity:.7;font-size:12px">Secure Access</div>
+            </div>
+          </div>
 
-/* ================= DATA ================= */
-async function loadAll() {
-  vehicles =
-    (await supabase.from("vehicles").select("*").order("created_at")).data ||
-    [];
-  todos =
-    (await supabase.from("todos").select("*").order("created_at")).data || [];
-  activity =
-    (
-      await supabase
-        .from("transactions")
-        .select("*, vehicles(name)")
-        .order("created_at", { ascending: false })
-        .limit(6)
-    ).data || [];
-}
+          ${infoText ? `<div style="opacity:.75;font-size:12px;margin-bottom:10px">${esc(infoText)}</div>` : ""}
 
-/* ================= UI ================= */
+          <label style="opacity:.75;font-size:12px">Email</label>
+          <input id="email" style="width:100%;margin-top:6px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.22);color:#e9eeff;outline:none" placeholder="name@mail.de"/>
 
-function layout(content) {
-  return `
-  <div class="wrap">
-    <div class="topbar">
-      <div class="brand">
-        <div class="logo"></div>
-        <div>
-          <h1>FleetVault</h1>
-          <div class="sub">Private Fahrzeugverwaltung</div>
+          <label style="opacity:.75;font-size:12px;margin-top:10px;display:block">Passwort</label>
+          <input id="password" type="password" style="width:100%;margin-top:6px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.22);color:#e9eeff;outline:none" placeholder="••••••••"/>
+
+          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
+            <button id="btnLogin" style="cursor:pointer;font-weight:800;padding:10px 12px;border-radius:14px;border:1px solid rgba(100,166,255,.45);background:rgba(100,166,255,.12);color:#e9eeff">Einloggen</button>
+            <button id="btnSignup" style="cursor:pointer;font-weight:800;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:#e9eeff">Registrieren</button>
+          </div>
+
+          <div style="opacity:.6;font-size:12px;margin-top:10px">Wenn du nach Registrierung nichts siehst: evtl. Email bestätigen (Supabase Setting).</div>
         </div>
       </div>
-      <div class="pill">
-        <span class="badge">${user.email}</span>
-        <button class="btn" onclick="location.hash='#/'">Dashboard</button>
-        <button class="btn" onclick="location.hash='#/vehicles'">Fahrzeuge</button>
-        <button class="btn danger" onclick="logout()">Logout</button>
-      </div>
-    </div>
-    ${content}
-  </div>`;
-}
+    `;
 
-/* ---------- LOGIN ---------- */
-function renderLogin() {
-  $("#app").innerHTML = `
-  <div class="center">
-    <div class="card loginCard">
-      <h2>Login</h2>
-      <input class="input" id="email" placeholder="Email" />
-      <input class="input" id="password" type="password" placeholder="Passwort" />
-      <div class="row">
-        <button class="btn primary" onclick="login()">Login</button>
-        <button class="btn" onclick="signup()">Registrieren</button>
-      </div>
-    </div>
-  </div>`;
-}
+    document.getElementById("btnLogin").onclick = signIn;
+    document.getElementById("btnSignup").onclick = signUp;
+  }
 
-/* ---------- DASHBOARD ---------- */
-async function renderDashboard() {
-  await loadAll();
+  async function signIn() {
+    const email = (document.getElementById("email")?.value || "").trim();
+    const password = (document.getElementById("password")?.value || "").trim();
+    if (!email || !password) return renderLogin("Bitte Email + Passwort eingeben.");
 
-  const income = activity
-    .filter((a) => a.type === "income")
-    .reduce((s, a) => s + Number(a.amount), 0);
-  const expense = activity
-    .filter((a) => a.type === "expense")
-    .reduce((s, a) => s + Number(a.amount), 0);
+    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    if (error) return renderLogin("Login fehlgeschlagen: " + error.message);
+    // onAuthStateChange rendert weiter
+  }
 
-  $("#app").innerHTML = layout(`
-  <div class="grid">
-    <div class="card">
-      <div class="kpis">
-        <div class="kpi"><div class="label">Fahrzeuge</div><div class="value">${vehicles.length}</div></div>
-        <div class="kpi"><div class="label">Einnahmen</div><div class="value good">${eur(income)}</div></div>
-        <div class="kpi"><div class="label">Ausgaben</div><div class="value bad">${eur(expense)}</div></div>
-        <div class="kpi"><div class="label">To-Dos</div><div class="value">${todos.filter(t=>!t.done).length}</div></div>
-      </div>
-    </div>
+  async function signUp() {
+    const email = (document.getElementById("email")?.value || "").trim();
+    const password = (document.getElementById("password")?.value || "").trim();
+    if (!email || !password) return renderLogin("Bitte Email + Passwort eingeben.");
 
-    <div class="card span8">
-      <h2>Letzte Fahrzeuge</h2>
-      ${vehicles.slice(0,4).map(v=>`
-        <div class="item">
-          <b>${esc(v.name)}</b>
-          <button class="btn" onclick="location.hash='#/vehicle/${v.id}'">Öffnen</button>
+    const { error } = await supabase.auth.signUp({ email, password });
+    if (error) return renderLogin("Registrierung fehlgeschlagen: " + error.message);
+
+    renderLogin("Account erstellt. Falls Email-Bestätigung aktiv ist: Mail bestätigen, dann einloggen.");
+  }
+
+  function renderDashboard(userEmail) {
+    appEl.innerHTML = `
+      <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px">
+        <div style="max-width:900px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
+          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
+            <div>
+              <div style="font-weight:900;font-size:18px">Dashboard</div>
+              <div style="opacity:.7;font-size:12px">Eingeloggt als: ${esc(userEmail)}</div>
+            </div>
+            <button id="btnLogout" style="cursor:pointer;font-weight:800;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,107,138,.45);background:rgba(255,107,138,.10);color:#e9eeff">Logout</button>
+          </div>
+          <div style="height:1px;background:rgba(255,255,255,.08);margin:14px 0"></div>
+          <div style="opacity:.75">Wenn du hier bist, funktioniert der Login. Als nächstes können wir wieder Fahrzeuge/ToDos/DB-UI reinsetzen.</div>
         </div>
-      `).join("") || "<div class='muted'>Keine Fahrzeuge</div>"}
-    </div>
+      </div>
+    `;
+    document.getElementById("btnLogout").onclick = async () => {
+      await supabase.auth.signOut();
+    };
+  }
 
-    <div class="card span4">
-      <h2>To-Do</h2>
-      <input class="input" id="todoText" placeholder="Neue Aufgabe" />
-      <button class="btn primary" onclick="addTodo()">+</button>
-      ${todos.map(t=>`
-        <div class="item">
-          <span style="text-decoration:${t.done?'line-through':'none'}">${esc(t.text)}</span>
-          <button class="btn" onclick="toggleTodo('${t.id}',${t.done})">✓</button>
-        </div>
-      `).join("")}
-    </div>
-  </div>`);
-}
+  async function boot() {
+    const { data, error } = await supabase.auth.getSession();
+    if (error) return showError("Supabase Session Error", error.message);
 
-/* ---------- VEHICLES ---------- */
-async function renderVehicles() {
-  await loadAll();
+    const sessUser = data.session?.user || null;
+    if (!sessUser) renderLogin();
+    else renderDashboard(sessUser.email || "User");
 
-  $("#app").innerHTML = layout(`
-  <div class="grid">
-    <div class="card span6">
-      <h2>Fahrzeug hinzufügen</h2>
-      <input class="input" id="vname" placeholder="Name" />
-      <select class="input" id="vtype">
-        <option>Motorrad</option>
-        <option>Roller</option>
-        <option>Auto</option>
-      </select>
-      <button class="btn primary" onclick="addVehicle()">Speichern</button>
-    </div>
+    supabase.auth.onAuthStateChange((_event, session) => {
+      const u = session?.user || null;
+      if (!u) renderLogin();
+      else renderDashboard(u.email || "User");
+    });
+  }
 
-    <div class="card span6">
-      <h2>Fahrzeuge</h2>
-      ${vehicles.map(v=>`
-        <div class="item">
-          <b>${esc(v.name)}</b>
-          <button class="btn" onclick="location.hash='#/vehicle/${v.id}'">Öffnen</button>
-        </div>
-      `).join("")}
-    </div>
-  </div>`);
-}
-
-async function addVehicle() {
-  const name = $("#vname").value;
-  const type = $("#vtype").value;
-  if (!name) return;
-
-  await supabase.from("vehicles").insert({
-    name,
-    type,
-    created_by: user.id,
-  });
-  location.hash = "#/vehicles";
-}
-
-/* ---------- SINGLE VEHICLE ---------- */
-async function renderVehicle(id) {
-  const { data: v } = await supabase
-    .from("vehicles")
-    .select("*")
-    .eq("id", id)
-    .single();
-
-  $("#app").innerHTML = layout(`
-  <div class="card">
-    <h2>${esc(v.name)}</h2>
-    <textarea class="input" id="notes">${esc(v.notes||"")}</textarea>
-    <button class="btn primary" onclick="saveNotes('${id}')">Notizen speichern</button>
-  </div>
-  `);
-}
-
-async function saveNotes(id) {
-  await supabase
-    .from("vehicles")
-    .update({ notes: $("#notes").value })
-    .eq("id", id);
-}
-
-/* ---------- TODOS ---------- */
-async function addTodo() {
-  const text = $("#todoText").value;
-  if (!text) return;
-  await supabase.from("todos").insert({ text });
-  renderDashboard();
-}
-
-async function toggleTodo(id, done) {
-  await supabase.from("todos").update({ done: !done }).eq("id", id);
-  renderDashboard();
-}
-
-/* ================= BOOT ================= */
-initAuth();
+  boot();
+})();
