@@ -1,4 +1,5 @@
 /* FleetVault MVP – statisch, speichert in localStorage
+   Global To-Dos im Dashboard enthalten.
    Später: sync + echtes Login via Supabase/Firebase leicht möglich.
 */
 const $ = (sel) => document.querySelector(sel);
@@ -26,6 +27,7 @@ function load() {
     if (!raw) return seed();
     const parsed = JSON.parse(raw);
     if (!parsed || !parsed.users || !parsed.vehicles) return seed();
+    parsed.todos ||= [];
     return parsed;
   } catch {
     return seed();
@@ -40,7 +42,8 @@ function seed() {
   return {
     users: ["Vince", "User2", "User3", "User4"],
     currentUser: null,
-    vehicles: []
+    vehicles: [],
+    todos: [] // Global ToDos
   };
 }
 
@@ -136,7 +139,7 @@ function renderLogin() {
           <div class="list">
             <div class="item">
               <div class="itemTitle">✅ Dashboard</div>
-              <div class="small">Übersicht: Fahrzeuge, Einnahmen, Ausgaben, Saldo</div>
+              <div class="small">Übersicht: Fahrzeuge, Einnahmen, Ausgaben, Saldo + To-Do</div>
             </div>
             <div class="item">
               <div class="itemTitle">✅ Fahrzeuge + Detailseite</div>
@@ -154,6 +157,8 @@ function renderLogin() {
 
 function renderDashboard() {
   const t = totals(db);
+  const openTodos = (db.todos || []).filter(x => !x.done).length;
+
   $("#app").innerHTML = `
     <div class="wrap">
       ${nav("dash")}
@@ -212,6 +217,51 @@ function renderDashboard() {
                     </div>
                   </div>`;
               }).join("")}
+            </div>
+          `}
+        </div>
+
+        <div class="card span4">
+          <div class="h2">
+            <h2>To-Do</h2>
+            <span class="badge">${openTodos} offen</span>
+          </div>
+
+          <div class="row">
+            <input class="input" id="todoText" placeholder="z.B. Öl wechseln / Teile bestellen" />
+            <button class="btn primary" onclick="addTodo()">+</button>
+          </div>
+
+          <div class="hr"></div>
+
+          ${(!db.todos || db.todos.length === 0) ? `
+            <div class="muted">Noch keine Aufgaben. Schreib oben eine rein.</div>
+          ` : `
+            <div class="list">
+              ${db.todos.slice().reverse().slice(0, 8).map(t => `
+                <div class="item">
+                  <div class="row" style="justify-content:space-between;align-items:center">
+                    <div>
+                      <div class="itemTitle" style="text-decoration:${t.done?'line-through':'none'};opacity:${t.done?0.65:1}">
+                        ${escapeHtml(t.text)}
+                      </div>
+                      <div class="small">von ${escapeHtml(t.by || "-")} · ${new Date(t.createdAt).toLocaleString("de-DE")}</div>
+                    </div>
+                    <div class="row">
+                      <button class="btn ${t.done?'':'primary'}" onclick="toggleTodo('${t.id}')">
+                        ${t.done ? '↩︎' : '✓'}
+                      </button>
+                      <button class="btn danger" onclick="deleteTodo('${t.id}')">x</button>
+                    </div>
+                  </div>
+                </div>
+              `).join("")}
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="row">
+              <button class="btn" onclick="clearDoneTodos()">Erledigte löschen</button>
             </div>
           `}
         </div>
@@ -316,317 +366,3 @@ function renderVehicle(id) {
     <div class="wrap">
       ${nav("veh")}
 
-      <div class="grid">
-        <div class="card">
-          <div class="h2">
-            <h2>${escapeHtml(v.name)} <span class="badge">${escapeHtml(v.type||"")}</span></h2>
-            <span class="badge">Saldo: <b style="color:${vt.balance>=0?"var(--good)":"var(--bad)"}">${moneyEUR(vt.balance)}</b></span>
-          </div>
-          <div class="muted">${escapeHtml(v.brand||"")} ${escapeHtml(v.model||"")} · VIN/FIN: ${escapeHtml(v.vin||"-")}</div>
-          <div class="hr"></div>
-          <div class="row">
-            <button class="btn" onclick="location.hash='#/vehicles'">← Fahrzeuge</button>
-            <button class="btn danger" onclick="deleteVehicle('${v.id}')">Fahrzeug löschen</button>
-          </div>
-        </div>
-
-        <div class="card span6">
-          <div class="h2"><h2>Notizen</h2></div>
-          <textarea class="input" id="notes">${escapeHtml(v.notes)}</textarea>
-          <div class="row" style="margin-top:10px">
-            <button class="btn primary" onclick="saveNotes('${v.id}')">Notizen speichern</button>
-          </div>
-        </div>
-
-        <div class="card span6">
-          <div class="h2"><h2>Bilder</h2><span class="badge">${v.images.length}</span></div>
-          <div class="muted">Füge Bild-URLs ein (z.B. aus Drive/iCloud/Imgur). Später können wir Upload einbauen.</div>
-          <div class="hr"></div>
-          <div class="row">
-            <input class="input" id="imgUrl" placeholder="https://..." />
-            <button class="btn primary" onclick="addImage('${v.id}')">Hinzufügen</button>
-          </div>
-          <div class="gallery">
-            ${v.images.map((url, idx) => `
-              <div>
-                <img class="thumb" src="${escapeAttr(url)}" alt="Bild" onerror="this.style.opacity=.3" />
-                <div style="margin-top:6px">
-                  <button class="btn danger" onclick="removeImage('${v.id}', ${idx})">Entfernen</button>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        </div>
-
-        <div class="card span8">
-          <div class="h2"><h2>Einnahmen & Ausgaben</h2></div>
-
-          <div class="split">
-            <div>
-              <label class="muted">Typ</label>
-              <select class="input" id="t_type">
-                <option value="expense">Ausgabe</option>
-                <option value="income">Einnahme</option>
-              </select>
-            </div>
-            <div>
-              <label class="muted">Betrag (€)</label>
-              <input class="input" id="t_amount" type="number" step="0.01" placeholder="z.B. 49.99" />
-            </div>
-          </div>
-
-          <div class="split" style="margin-top:10px">
-            <div>
-              <label class="muted">Datum</label>
-              <input class="input" id="t_date" type="date" value="${todayISO()}" />
-            </div>
-            <div>
-              <label class="muted">Kategorie</label>
-              <input class="input" id="t_cat" placeholder="z.B. Teile / TÜV / Sprit / Verkauf" />
-            </div>
-          </div>
-
-          <label class="muted" style="margin-top:10px;display:block">Beschreibung</label>
-          <input class="input" id="t_desc" placeholder="z.B. NG Bremsscheibe vorne" />
-
-          <div class="row" style="margin-top:12px">
-            <button class="btn primary" onclick="addTransaction('${v.id}')">Eintrag hinzufügen</button>
-          </div>
-
-          <div class="hr"></div>
-
-          ${v.transactions.length === 0 ? `<div class="muted">Noch keine Einträge.</div>` : `
-            <table class="table">
-              <tbody>
-                ${v.transactions.slice().reverse().map((t, idxFromEnd) => {
-                  const idx = v.transactions.length - 1 - idxFromEnd;
-                  const isInc = t.type === "income";
-                  return `
-                    <tr class="tr">
-                      <td>
-                        <div class="row" style="justify-content:space-between;align-items:center">
-                          <span class="badge">${escapeHtml(t.date)} · ${escapeHtml(t.category||"")}</span>
-                          <b style="color:${isInc?"var(--good)":"var(--bad)"}">
-                            ${isInc?"+":"-"}${moneyEUR(t.amount)}
-                          </b>
-                        </div>
-                        <div class="small">${escapeHtml(t.desc||"")}</div>
-                        <div class="row" style="margin-top:8px">
-                          <button class="btn danger" onclick="removeTransaction('${v.id}', ${idx})">Löschen</button>
-                        </div>
-                      </td>
-                    </tr>`;
-                }).join("")}
-              </tbody>
-            </table>
-          `}
-        </div>
-
-        <div class="card span4">
-          <div class="h2"><h2>Ersatzteile</h2></div>
-
-          <div class="muted">Brauchst du / hast du schon.</div>
-          <div class="hr"></div>
-
-          <label class="muted">Benötigt</label>
-          <div class="row">
-            <input class="input" id="needInput" placeholder="z.B. Blinkerrelais" />
-            <button class="btn primary" onclick="addPart('${v.id}','need')">+</button>
-          </div>
-          <div class="list" style="margin-top:10px">
-            ${v.parts.need.map((p,i)=>`
-              <div class="item">
-                <div class="row" style="justify-content:space-between;align-items:center">
-                  <div>${escapeHtml(p)}</div>
-                  <button class="btn danger" onclick="removePart('${v.id}','need',${i})">x</button>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-
-          <div class="hr"></div>
-
-          <label class="muted">Vorhanden</label>
-          <div class="row">
-            <input class="input" id="haveInput" placeholder="z.B. Zündkerze neu" />
-            <button class="btn primary" onclick="addPart('${v.id}','have')">+</button>
-          </div>
-          <div class="list" style="margin-top:10px">
-            ${v.parts.have.map((p,i)=>`
-              <div class="item">
-                <div class="row" style="justify-content:space-between;align-items:center">
-                  <div>${escapeHtml(p)}</div>
-                  <button class="btn danger" onclick="removePart('${v.id}','have',${i})">x</button>
-                </div>
-              </div>
-            `).join("")}
-          </div>
-        </div>
-      </div>
-    </div>`;
-}
-
-/* Actions */
-function login() {
-  const u = $("#userSelect").value;
-  db.currentUser = u;
-  save(db);
-  location.hash = "#/";
-}
-function logout() {
-  db.currentUser = null;
-  save(db);
-  location.hash = "#/";
-}
-function resetAll() {
-  localStorage.removeItem(STORE_KEY);
-  db = load();
-  route();
-}
-
-function addVehicle() {
-  const name = $("#v_name").value.trim();
-  if (!name) return alert("Bitte Name eingeben.");
-
-  const v = {
-    id: uid(),
-    name,
-    brand: $("#v_brand").value.trim(),
-    model: $("#v_model").value.trim(),
-    type: $("#v_type").value,
-    vin: $("#v_vin").value.trim(),
-    notes: "",
-    images: [],
-    parts: { need: [], have: [] },
-    transactions: [],
-    createdBy: db.currentUser,
-    createdAt: new Date().toISOString()
-  };
-
-  db.vehicles.push(v);
-  save(db);
-  location.hash = `#/vehicle/${v.id}`;
-}
-
-function quickAddVehicle() {
-  const name = prompt("Name des Fahrzeugs?");
-  if (!name) return;
-  db.vehicles.push({
-    id: uid(),
-    name: name.trim(),
-    brand: "",
-    model: "",
-    type: "Motorrad",
-    vin: "",
-    notes: "",
-    images: [],
-    parts: { need: [], have: [] },
-    transactions: [],
-    createdBy: db.currentUser,
-    createdAt: new Date().toISOString()
-  });
-  save(db);
-  location.hash = "#/vehicles";
-}
-
-function deleteVehicle(id) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  if (!confirm(`"${v.name}" wirklich löschen?`)) return;
-  db.vehicles = db.vehicles.filter(x => x.id !== id);
-  save(db);
-  location.hash = "#/vehicles";
-}
-
-function saveNotes(id) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  v.notes = $("#notes").value;
-  save(db);
-  route();
-}
-
-function addImage(id) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  const url = $("#imgUrl").value.trim();
-  if (!url) return;
-  v.images.push(url);
-  save(db);
-  route();
-}
-function removeImage(id, idx) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  v.images.splice(idx, 1);
-  save(db);
-  route();
-}
-
-function addTransaction(id) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-
-  const type = $("#t_type").value;
-  const amount = Number($("#t_amount").value);
-  const date = $("#t_date").value;
-  const category = $("#t_cat").value.trim();
-  const desc = $("#t_desc").value.trim();
-
-  if (!amount || amount <= 0) return alert("Betrag muss > 0 sein.");
-  if (!date) return alert("Datum fehlt.");
-
-  v.transactions.push({
-    id: uid(),
-    type,
-    amount,
-    date,
-    category,
-    desc,
-    by: db.currentUser
-  });
-
-  save(db);
-  route();
-}
-function removeTransaction(id, idx) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  v.transactions.splice(idx, 1);
-  save(db);
-  route();
-}
-
-function addPart(id, which) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  const inputId = which === "need" ? "needInput" : "haveInput";
-  const txt = $("#" + inputId).value.trim();
-  if (!txt) return;
-  v.parts[which].push(txt);
-  save(db);
-  route();
-}
-function removePart(id, which, idx) {
-  const v = db.vehicles.find(x => x.id === id);
-  if (!v) return;
-  v.parts[which].splice(idx, 1);
-  save(db);
-  route();
-}
-
-/* basic escaping */
-function escapeHtml(str){
-  return String(str ?? "")
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll('"',"&quot;")
-    .replaceAll("'","&#039;");
-}
-function escapeAttr(str){ return escapeHtml(str).replaceAll("`","&#096;"); }
-
-/* boot */
-let db = load();
-window.addEventListener("hashchange", route);
-route();
