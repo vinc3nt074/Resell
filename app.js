@@ -1,152 +1,843 @@
-// FleetVault – "unkaputtbar": zeigt Fehler direkt auf der Seite
+/* FleetVault – Supabase Multi-User App
+   - Login/Signup (Supabase Auth)
+   - Dashboard (KPIs + Activity + Global Todos)
+   - Vehicles CRUD
+   - Vehicle detail: notes, images (URLs), parts need/have, transactions
+   - Hash routing
+   - Shows errors on-page (no blank screen)
+*/
 
 (() => {
-  const appEl = document.getElementById("app");
-  if (!appEl) {
+  const app = document.getElementById("app");
+  if (!app) {
     document.body.innerHTML =
       "<div style='padding:24px;font-family:system-ui'>Fehler: #app fehlt in index.html</div>";
     return;
   }
 
-  // On-page error overlay
-  function showError(title, msg) {
-    appEl.innerHTML = `
+  /* ---------- On-page error output ---------- */
+  function fatal(title, msg) {
+    app.innerHTML = `
       <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px">
-        <div style="max-width:720px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
-          <div style="font-weight:900;font-size:18px;margin-bottom:8px;color:#ff6b8a">${title}</div>
-          <div style="white-space:pre-wrap;line-height:1.4;opacity:.9">${msg}</div>
+        <div style="max-width:860px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
+          <div style="font-weight:900;font-size:18px;margin-bottom:8px;color:#ff6b8a">${esc(title)}</div>
+          <pre style="white-space:pre-wrap;line-height:1.4;opacity:.9;margin:0">${esc(msg)}</pre>
         </div>
       </div>`;
   }
-
-  window.addEventListener("error", (e) => showError("JS Fehler", e.message || "unknown"));
+  window.addEventListener("error", (e) => fatal("JS Fehler", e.message || "unknown"));
   window.addEventListener("unhandledrejection", (e) =>
-    showError("Promise Fehler", (e.reason && (e.reason.message || String(e.reason))) || "unknown")
+    fatal("Promise Fehler", (e.reason && (e.reason.message || String(e.reason))) || "unknown")
   );
 
-  // Quick "loading" screen so it's never blank
-  appEl.innerHTML = `
-    <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px">
-      <div style="max-width:520px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
-        <div style="font-weight:900;font-size:18px;margin-bottom:6px">FleetVault</div>
-        <div style="opacity:.75">Lade…</div>
-      </div>
-    </div>`;
-
-  // ===== Supabase config =====
-  const SUPABASE_URL = "https://sikhqmzpcdwwdywaejwl.supabase.co";
-  const SUPABASE_ANON_KEY =
-    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpa2hxbXpwY2R3d2R5d2FlandsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5OTA0ODgsImV4cCI6MjA4NDU2NjQ4OH0.rabK9l74yjAzJ4flMwE0_AasVu_3cth3g-FRNo4JCuM";
-
-  // Check that Supabase SDK exists
+  /* ---------- Supabase ---------- */
   if (!window.supabase || !window.supabase.createClient) {
-    showError(
+    fatal(
       "Supabase SDK fehlt",
-      "Die Supabase-Library wurde nicht geladen.\n\nFix:\nIn index.html MUSS VOR app.js stehen:\n<script src=\"https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2\"></script>\n<script src=\"app.js\"></script>"
+      `In index.html muss VOR app.js stehen:
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>`
     );
     return;
   }
 
-  const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+  const SUPABASE_URL = "https://sikhqmzpcdwwdywaejwl.supabase.co";
+  const SUPABASE_ANON_KEY =
+    "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InNpa2hxbXpwY2R3d2R5d2FlandsIiwicm9sZSI6ImFub24iLCJpYXQiOjE3Njg5OTA0ODgsImV4cCI6MjA4NDU2NjQ4OH0.rabK9l74yjAzJ4flMwE0_AasVu_3cth3g-FRNo4JCuM";
 
-  // Helpers
-  const esc = (s) =>
-    String(s ?? "")
+  const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+
+  /* ---------- State ---------- */
+  let sessionUser = null;
+  let state = {
+    vehicles: [],
+    todos: [],
+    activity: [],
+  };
+
+  /* ---------- Helpers ---------- */
+  const $ = (s) => document.querySelector(s);
+
+  function esc(str) {
+    return String(str ?? "")
       .replaceAll("&", "&amp;")
       .replaceAll("<", "&lt;")
-      .replaceAll(">", "&gt;");
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+  }
+  function moneyEUR(n) {
+    const v = Number(n || 0);
+    return v.toLocaleString("de-DE", { style: "currency", currency: "EUR" });
+  }
+  function todayISO() {
+    const d = new Date();
+    const pad = (x) => String(x).padStart(2, "0");
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
 
-  // Render Login
-  function renderLogin(infoText = "") {
-    appEl.innerHTML = `
-      <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px;display:flex;align-items:center;justify-content:center">
-        <div style="width:min(480px,100%);border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
-          <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px">
-            <div style="width:34px;height:34px;border-radius:14px;background:linear-gradient(135deg, rgba(100,166,255,.55), rgba(102,255,176,.35));box-shadow:0 12px 28px rgba(0,0,0,.35)"></div>
-            <div>
-              <div style="font-weight:900;font-size:16px">FleetVault</div>
-              <div style="opacity:.7;font-size:12px">Secure Access</div>
+  /* ---------- Routing ---------- */
+  function route() {
+    const h = (location.hash || "#/").slice(2);
+    const [page, id] = h.split("/");
+
+    if (!sessionUser) return renderLogin();
+
+    if (!page) return renderDashboard();
+    if (page === "vehicles") return renderVehicles();
+    if (page === "vehicle" && id) return renderVehicle(id);
+
+    return renderDashboard();
+  }
+  window.addEventListener("hashchange", route);
+
+  /* ---------- Top UI ---------- */
+  function nav(active) {
+    return `
+      <div class="topbar">
+        <div class="brand">
+          <div class="logo"></div>
+          <div>
+            <h1>FleetVault</h1>
+            <div class="sub">Fahrzeuge · Notizen · Finanzen · Teile</div>
+          </div>
+        </div>
+
+        <div class="pill">
+          <span class="badge">👤 ${esc(sessionUser.email || "User")}</span>
+          <button class="btn ${active === "dash" ? "primary" : ""}" onclick="location.hash='#/'">Dashboard</button>
+          <button class="btn ${active === "veh" ? "primary" : ""}" onclick="location.hash='#/vehicles'">Fahrzeuge</button>
+          <button class="btn danger" onclick="logout()">Logout</button>
+        </div>
+      </div>
+    `;
+  }
+
+  /* ---------- Data loaders ---------- */
+  async function refreshAll() {
+    await Promise.all([loadVehicles(), loadTodos(), loadActivity()]);
+  }
+
+  async function loadVehicles() {
+    const { data, error } = await sb.from("vehicles").select("*").order("created_at", { ascending: false });
+    if (error) throw new Error("vehicles: " + error.message);
+    state.vehicles = data || [];
+  }
+
+  async function loadTodos() {
+    const { data, error } = await sb.from("todos").select("*").order("created_at", { ascending: false });
+    if (error) throw new Error("todos: " + error.message);
+    state.todos = data || [];
+  }
+
+  async function loadActivity() {
+    const { data, error } = await sb
+      .from("transactions")
+      .select("id, type, amount, date, category, description, created_at, vehicle_id, vehicles(name)")
+      .order("created_at", { ascending: false })
+      .limit(8);
+
+    if (error) throw new Error("activity: " + error.message);
+    state.activity = data || [];
+  }
+
+  async function computeTotals() {
+    const { data, error } = await sb.from("transactions").select("type, amount");
+    if (error) return { income: 0, expense: 0, balance: 0 };
+
+    let income = 0,
+      expense = 0;
+    for (const t of data || []) {
+      const amt = Number(t.amount || 0);
+      if (t.type === "income") income += amt;
+      else expense += amt;
+    }
+    return { income, expense, balance: income - expense };
+  }
+
+  async function computeVehicleTotals(vehicleId) {
+    const { data, error } = await sb.from("transactions").select("type, amount").eq("vehicle_id", vehicleId);
+    if (error) return { income: 0, expense: 0, balance: 0 };
+
+    let income = 0,
+      expense = 0;
+    for (const t of data || []) {
+      const amt = Number(t.amount || 0);
+      if (t.type === "income") income += amt;
+      else expense += amt;
+    }
+    return { income, expense, balance: income - expense };
+  }
+
+  /* ---------- Auth UI ---------- */
+  function renderLogin(info = "") {
+    // Nur Login-Fenster (wie gewünscht)
+    app.innerHTML = `
+      <div class="wrap">
+        <div class="center">
+          <div class="card loginCard">
+            <div class="h2"><h2 class="loginTitle">Login</h2><span class="badge">Supabase</span></div>
+            ${info ? `<div class="small">${esc(info)}</div><div class="hr"></div>` : `<div class="hr"></div>`}
+
+            <label class="muted">Email</label>
+            <input class="input" id="email" placeholder="name@mail.de" />
+
+            <label class="muted" style="margin-top:10px;display:block">Passwort</label>
+            <input class="input" id="password" type="password" placeholder="••••••••" />
+
+            <div class="row" style="margin-top:12px">
+              <button class="btn primary" id="btnLogin">Einloggen</button>
+              <button class="btn" id="btnSignup">Registrieren</button>
             </div>
+
+            <div class="small">Wenn Bestätigung aktiv ist: Email-Link klicken und zurückkommen.</div>
           </div>
-
-          ${infoText ? `<div style="opacity:.75;font-size:12px;margin-bottom:10px">${esc(infoText)}</div>` : ""}
-
-          <label style="opacity:.75;font-size:12px">Email</label>
-          <input id="email" style="width:100%;margin-top:6px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.22);color:#e9eeff;outline:none" placeholder="name@mail.de"/>
-
-          <label style="opacity:.75;font-size:12px;margin-top:10px;display:block">Passwort</label>
-          <input id="password" type="password" style="width:100%;margin-top:6px;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.14);background:rgba(0,0,0,.22);color:#e9eeff;outline:none" placeholder="••••••••"/>
-
-          <div style="display:flex;gap:10px;margin-top:12px;flex-wrap:wrap">
-            <button id="btnLogin" style="cursor:pointer;font-weight:800;padding:10px 12px;border-radius:14px;border:1px solid rgba(100,166,255,.45);background:rgba(100,166,255,.12);color:#e9eeff">Einloggen</button>
-            <button id="btnSignup" style="cursor:pointer;font-weight:800;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.05);color:#e9eeff">Registrieren</button>
-          </div>
-
-          <div style="opacity:.6;font-size:12px;margin-top:10px">Wenn du nach Registrierung nichts siehst: evtl. Email bestätigen (Supabase Setting).</div>
         </div>
       </div>
     `;
 
-    document.getElementById("btnLogin").onclick = signIn;
-    document.getElementById("btnSignup").onclick = signUp;
+    $("#btnLogin").onclick = signIn;
+    $("#btnSignup").onclick = signUp;
   }
 
   async function signIn() {
-    const email = (document.getElementById("email")?.value || "").trim();
-    const password = (document.getElementById("password")?.value || "").trim();
+    const email = ($("#email").value || "").trim();
+    const password = ($("#password").value || "").trim();
     if (!email || !password) return renderLogin("Bitte Email + Passwort eingeben.");
 
-    const { error } = await supabase.auth.signInWithPassword({ email, password });
+    const { data, error } = await sb.auth.signInWithPassword({ email, password });
     if (error) return renderLogin("Login fehlgeschlagen: " + error.message);
-    // onAuthStateChange rendert weiter
+
+    sessionUser = data.user;
+    await refreshAll();
+    location.hash = "#/";
+    route();
   }
 
   async function signUp() {
-    const email = (document.getElementById("email")?.value || "").trim();
-    const password = (document.getElementById("password")?.value || "").trim();
+    const email = ($("#email").value || "").trim();
+    const password = ($("#password").value || "").trim();
     if (!email || !password) return renderLogin("Bitte Email + Passwort eingeben.");
 
-    const { error } = await supabase.auth.signUp({ email, password });
-    if (error) return renderLogin("Registrierung fehlgeschlagen: " + error.message);
+    // Wichtig: redirectTo setzt die URL für Mail-Links (falls Supabase-Setting spinnt, hilft das oft)
+    const redirectTo = window.location.origin + window.location.pathname;
 
-    renderLogin("Account erstellt. Falls Email-Bestätigung aktiv ist: Mail bestätigen, dann einloggen.");
+    const { error } = await sb.auth.signUp({
+      email,
+      password,
+      options: { emailRedirectTo: redirectTo },
+    });
+
+    if (error) return renderLogin("Registrierung fehlgeschlagen: " + error.message);
+    renderLogin("Account erstellt. Bitte Mail bestätigen (falls aktiviert), dann einloggen.");
   }
 
-  function renderDashboard(userEmail) {
-    appEl.innerHTML = `
-      <div style="min-height:100vh;background:#070a12;color:#e9eeff;font-family:system-ui;padding:24px">
-        <div style="max-width:900px;margin:0 auto;border:1px solid rgba(255,255,255,.12);background:rgba(255,255,255,.06);border-radius:18px;padding:16px">
-          <div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;align-items:center">
-            <div>
-              <div style="font-weight:900;font-size:18px">Dashboard</div>
-              <div style="opacity:.7;font-size:12px">Eingeloggt als: ${esc(userEmail)}</div>
+  async function logout() {
+    await sb.auth.signOut();
+    sessionUser = null;
+    location.hash = "#/";
+    route();
+  }
+
+  /* ---------- Dashboard ---------- */
+  async function renderDashboard() {
+    await refreshAll();
+    const t = await computeTotals();
+    const openTodos = (state.todos || []).filter((x) => !x.done).length;
+
+    app.innerHTML = `
+      <div class="wrap">
+        ${nav("dash")}
+        <div class="grid">
+
+          <div class="card">
+            <div class="h2">
+              <h2>Dashboard</h2>
+              <span class="badge">Online Sync aktiv</span>
             </div>
-            <button id="btnLogout" style="cursor:pointer;font-weight:800;padding:10px 12px;border-radius:14px;border:1px solid rgba(255,107,138,.45);background:rgba(255,107,138,.10);color:#e9eeff">Logout</button>
+
+            <div class="kpis">
+              <div class="kpi">
+                <div class="label">Fahrzeuge</div>
+                <div class="value">${state.vehicles.length}</div>
+              </div>
+              <div class="kpi">
+                <div class="label">Einnahmen</div>
+                <div class="value good">${moneyEUR(t.income)}</div>
+              </div>
+              <div class="kpi">
+                <div class="label">Ausgaben</div>
+                <div class="value bad">${moneyEUR(t.expense)}</div>
+              </div>
+              <div class="kpi">
+                <div class="label">Offene To-Dos</div>
+                <div class="value">${openTodos}</div>
+              </div>
+            </div>
+
+            <div class="hr"></div>
+
+            <div class="row">
+              <button class="btn primary" onclick="location.hash='#/vehicles'">Fahrzeuge verwalten</button>
+              <button class="btn" onclick="quickAddVehicle()">+ Schnell hinzufügen</button>
+            </div>
           </div>
-          <div style="height:1px;background:rgba(255,255,255,.08);margin:14px 0"></div>
-          <div style="opacity:.75">Wenn du hier bist, funktioniert der Login. Als nächstes können wir wieder Fahrzeuge/ToDos/DB-UI reinsetzen.</div>
+
+          <div class="card span8">
+            <div class="h2"><h2>Letzte Fahrzeuge</h2></div>
+            ${state.vehicles.length === 0 ? `<div class="muted">Noch keine Fahrzeuge.</div>` : `
+              <div class="list">
+                ${state.vehicles.slice(0,4).map(v => `
+                  <div class="item">
+                    <div class="row" style="justify-content:space-between; align-items:center">
+                      <div>
+                        <div class="itemTitle">${esc(v.name)} <span class="badge">${esc(v.type||"Fahrzeug")}</span></div>
+                        <div class="small">${esc(v.brand||"")} ${esc(v.model||"")} · VIN: ${esc(v.vin||"-")}</div>
+                      </div>
+                      <div class="row">
+                        <button class="btn" onclick="location.hash='#/vehicle/${v.id}'">Öffnen</button>
+                      </div>
+                    </div>
+                  </div>
+                `).join("")}
+              </div>
+            `}
+          </div>
+
+          <div class="card span4">
+            <div class="h2">
+              <h2>To-Do (global)</h2>
+              <span class="badge">${openTodos} offen</span>
+            </div>
+
+            <div class="row">
+              <input class="input" id="todoText" placeholder="z.B. Teile bestellen / TÜV Termin" />
+              <button class="btn primary" onclick="addTodo()">+</button>
+            </div>
+
+            <div class="hr"></div>
+
+            ${(state.todos.length === 0) ? `<div class="muted">Noch keine Aufgaben.</div>` : `
+              <div class="list">
+                ${state.todos.slice(0, 8).map(t => `
+                  <div class="item">
+                    <div class="row" style="justify-content:space-between;align-items:center">
+                      <div>
+                        <div class="itemTitle" style="text-decoration:${t.done?'line-through':'none'};opacity:${t.done?0.65:1}">
+                          ${esc(t.text)}
+                        </div>
+                        <div class="small">${new Date(t.created_at).toLocaleString("de-DE")}</div>
+                      </div>
+                      <div class="row">
+                        <button class="btn ${t.done?'':'primary'}" onclick="toggleTodo('${t.id}', ${t.done ? "true":"false"})">${t.done ? '↩︎' : '✓'}</button>
+                        <button class="btn danger" onclick="deleteTodo('${t.id}')">x</button>
+                      </div>
+                    </div>
+                  </div>
+                `).join("")}
+              </div>
+
+              <div class="hr"></div>
+              <div class="row">
+                <button class="btn" onclick="clearDoneTodos()">Erledigte löschen</button>
+              </div>
+            `}
+          </div>
+
+          <div class="card span12">
+            <div class="h2"><h2>Activity</h2><span class="badge">Letzte Transaktionen</span></div>
+            ${state.activity.length === 0 ? `<div class="muted">Noch keine Transaktionen.</div>` : `
+              <div class="list">
+                ${state.activity.map(a => {
+                  const isInc = a.type === "income";
+                  const vname = a.vehicles?.name || "Fahrzeug";
+                  return `
+                    <div class="item">
+                      <div class="row" style="justify-content:space-between;align-items:center">
+                        <div>
+                          <div class="itemTitle">${esc(vname)} <span class="badge">${esc(a.date)} · ${esc(a.category || "")}</span></div>
+                          <div class="small">${esc(a.description || "")}</div>
+                        </div>
+                        <div style="font-weight:950;color:${isInc?"var(--good)":"var(--bad)"}">
+                          ${isInc?"+":"-"}${moneyEUR(a.amount)}
+                        </div>
+                      </div>
+                    </div>
+                  `;
+                }).join("")}
+              </div>
+            `}
+          </div>
+
         </div>
       </div>
     `;
-    document.getElementById("btnLogout").onclick = async () => {
-      await supabase.auth.signOut();
+  }
+
+  /* ---------- Vehicles list + add ---------- */
+  async function renderVehicles() {
+    await loadVehicles();
+
+    app.innerHTML = `
+      <div class="wrap">
+        ${nav("veh")}
+        <div class="grid">
+
+          <div class="card span6">
+            <div class="h2"><h2>Fahrzeug hinzufügen</h2></div>
+
+            <label class="muted">Name</label>
+            <input class="input" id="v_name" placeholder="z.B. Yamaha DT80LC2" />
+
+            <div class="split" style="margin-top:10px">
+              <div>
+                <label class="muted">Marke</label>
+                <input class="input" id="v_brand" placeholder="z.B. Yamaha" />
+              </div>
+              <div>
+                <label class="muted">Modell</label>
+                <input class="input" id="v_model" placeholder="z.B. DT80LC2" />
+              </div>
+            </div>
+
+            <div class="split" style="margin-top:10px">
+              <div>
+                <label class="muted">Typ</label>
+                <select class="input" id="v_type">
+                  <option>Motorrad</option>
+                  <option>Roller</option>
+                  <option>Auto</option>
+                  <option>Sonstiges</option>
+                </select>
+              </div>
+              <div>
+                <label class="muted">VIN / FIN</label>
+                <input class="input" id="v_vin" placeholder="optional" />
+              </div>
+            </div>
+
+            <div class="row" style="margin-top:12px">
+              <button class="btn primary" onclick="addVehicle()">Speichern</button>
+              <button class="btn" onclick="location.hash='#/'">Zurück</button>
+            </div>
+          </div>
+
+          <div class="card span6">
+            <div class="h2"><h2>Fahrzeuge</h2><span class="badge">${state.vehicles.length} insgesamt</span></div>
+
+            ${state.vehicles.length === 0 ? `<div class="muted">Noch leer.</div>` : `
+              <div class="list">
+                ${state.vehicles.map(v => `
+                  <div class="item">
+                    <div class="row" style="justify-content:space-between;align-items:center">
+                      <div>
+                        <div class="itemTitle">${esc(v.name)}</div>
+                        <div class="small">${esc(v.brand||"")} ${esc(v.model||"")} · ${esc(v.type||"")}</div>
+                      </div>
+                      <div class="row">
+                        <button class="btn" onclick="location.hash='#/vehicle/${v.id}'">Öffnen</button>
+                        <button class="btn danger" onclick="deleteVehicle('${v.id}')">Löschen</button>
+                      </div>
+                    </div>
+                  </div>
+                `).join("")}
+              </div>
+            `}
+          </div>
+
+        </div>
+      </div>
+    `;
+  }
+
+  async function addVehicle() {
+    const name = ($("#v_name").value || "").trim();
+    if (!name) return alert("Bitte Name eingeben.");
+
+    const payload = {
+      name,
+      brand: ($("#v_brand").value || "").trim(),
+      model: ($("#v_model").value || "").trim(),
+      type: ($("#v_type").value || "").trim(),
+      vin: ($("#v_vin").value || "").trim(),
+      created_by: sessionUser.id,
     };
+
+    const { data, error } = await sb.from("vehicles").insert(payload).select("*").single();
+    if (error) return alert("Fehler: " + error.message);
+
+    location.hash = `#/vehicle/${data.id}`;
+    route();
   }
 
-  async function boot() {
-    const { data, error } = await supabase.auth.getSession();
-    if (error) return showError("Supabase Session Error", error.message);
+  async function quickAddVehicle() {
+    const name = prompt("Name des Fahrzeugs?");
+    if (!name) return;
 
-    const sessUser = data.session?.user || null;
-    if (!sessUser) renderLogin();
-    else renderDashboard(sessUser.email || "User");
+    const { data, error } = await sb
+      .from("vehicles")
+      .insert({ name: name.trim(), type: "Motorrad", created_by: sessionUser.id })
+      .select("*")
+      .single();
 
-    supabase.auth.onAuthStateChange((_event, session) => {
-      const u = session?.user || null;
-      if (!u) renderLogin();
-      else renderDashboard(u.email || "User");
+    if (error) return alert("Fehler: " + error.message);
+    location.hash = "#/vehicles";
+    route();
+  }
+
+  async function deleteVehicle(id) {
+    const ok = confirm("Fahrzeug wirklich löschen?");
+    if (!ok) return;
+
+    const { error } = await sb.from("vehicles").delete().eq("id", id);
+    if (error) return alert("Fehler: " + error.message);
+
+    location.hash = "#/vehicles";
+    route();
+  }
+
+  /* ---------- Vehicle detail ---------- */
+  async function renderVehicle(id) {
+    const { data: v, error } = await sb.from("vehicles").select("*").eq("id", id).single();
+    if (error || !v) {
+      location.hash = "#/vehicles";
+      return;
+    }
+
+    const vt = await computeVehicleTotals(id);
+
+    const { data: tx, error: txErr } = await sb
+      .from("transactions")
+      .select("*")
+      .eq("vehicle_id", id)
+      .order("created_at", { ascending: false });
+
+    if (txErr) return alert("Fehler transactions: " + txErr.message);
+
+    app.innerHTML = `
+      <div class="wrap">
+        ${nav("veh")}
+
+        <div class="grid">
+          <div class="card">
+            <div class="h2">
+              <h2>${esc(v.name)} <span class="badge">${esc(v.type || "")}</span></h2>
+              <span class="badge">Saldo: <b style="color:${vt.balance >= 0 ? "var(--good)" : "var(--bad)"}">${moneyEUR(
+                vt.balance
+              )}</b></span>
+            </div>
+            <div class="muted">${esc(v.brand || "")} ${esc(v.model || "")} · VIN/FIN: ${esc(v.vin || "-")}</div>
+            <div class="hr"></div>
+            <div class="row">
+              <button class="btn" onclick="location.hash='#/vehicles'">← Fahrzeuge</button>
+              <button class="btn danger" onclick="deleteVehicle('${v.id}')">Fahrzeug löschen</button>
+            </div>
+          </div>
+
+          <div class="card span6">
+            <div class="h2"><h2>Notizen</h2></div>
+            <textarea class="input" id="notes">${esc(v.notes || "")}</textarea>
+            <div class="row" style="margin-top:10px">
+              <button class="btn primary" onclick="saveNotes('${v.id}')">Notizen speichern</button>
+            </div>
+          </div>
+
+          <div class="card span6">
+            <div class="h2"><h2>Bilder</h2><span class="badge">${(v.images || []).length}</span></div>
+            <div class="muted">Füge Bild-URLs ein. (Upload später möglich.)</div>
+            <div class="hr"></div>
+            <div class="row">
+              <input class="input" id="imgUrl" placeholder="https://..." />
+              <button class="btn primary" onclick="addImage('${v.id}')">Hinzufügen</button>
+            </div>
+            <div class="gallery">
+              ${(v.images || [])
+                .map(
+                  (url, idx) => `
+                  <div>
+                    <img class="thumb" src="${esc(url)}" alt="Bild" onerror="this.style.opacity=.3" />
+                    <div style="margin-top:6px">
+                      <button class="btn danger" onclick="removeImage('${v.id}', ${idx})">Entfernen</button>
+                    </div>
+                  </div>
+                `
+                )
+                .join("")}
+            </div>
+          </div>
+
+          <div class="card span8">
+            <div class="h2"><h2>Einnahmen & Ausgaben</h2></div>
+
+            <div class="split">
+              <div>
+                <label class="muted">Typ</label>
+                <select class="input" id="t_type">
+                  <option value="expense">Ausgabe</option>
+                  <option value="income">Einnahme</option>
+                </select>
+              </div>
+              <div>
+                <label class="muted">Betrag (€)</label>
+                <input class="input" id="t_amount" type="number" step="0.01" placeholder="z.B. 49.99" />
+              </div>
+            </div>
+
+            <div class="split" style="margin-top:10px">
+              <div>
+                <label class="muted">Datum</label>
+                <input class="input" id="t_date" type="date" value="${todayISO()}" />
+              </div>
+              <div>
+                <label class="muted">Kategorie</label>
+                <input class="input" id="t_cat" placeholder="z.B. Teile / TÜV / Sprit / Verkauf" />
+              </div>
+            </div>
+
+            <label class="muted" style="margin-top:10px;display:block">Beschreibung</label>
+            <input class="input" id="t_desc" placeholder="z.B. NG Bremsscheibe vorne" />
+
+            <div class="row" style="margin-top:12px">
+              <button class="btn primary" onclick="addTransaction('${v.id}')">Eintrag hinzufügen</button>
+            </div>
+
+            <div class="hr"></div>
+
+            ${(tx || []).length === 0 ? `<div class="muted">Noch keine Einträge.</div>` : `
+              <div class="list">
+                ${(tx || [])
+                  .map((t) => {
+                    const isInc = t.type === "income";
+                    return `
+                      <div class="item">
+                        <div class="row" style="justify-content:space-between;align-items:center">
+                          <span class="badge">${esc(t.date)} · ${esc(t.category || "")}</span>
+                          <b style="color:${isInc ? "var(--good)" : "var(--bad)"}">
+                            ${isInc ? "+" : "-"}${moneyEUR(t.amount)}
+                          </b>
+                        </div>
+                        <div class="small">${esc(t.description || "")}</div>
+                        <div class="row" style="margin-top:8px">
+                          <button class="btn danger" onclick="removeTransaction('${t.id}','${v.id}')">Löschen</button>
+                        </div>
+                      </div>
+                    `;
+                  })
+                  .join("")}
+              </div>
+            `}
+          </div>
+
+          <div class="card span4">
+            <div class="h2"><h2>Ersatzteile</h2></div>
+
+            <div class="muted">Brauchst du / hast du schon.</div>
+            <div class="hr"></div>
+
+            <label class="muted">Benötigt</label>
+            <div class="row">
+              <input class="input" id="needInput" placeholder="z.B. Blinkerrelais" />
+              <button class="btn primary" onclick="addPart('${v.id}','need')">+</button>
+            </div>
+            <div class="list" style="margin-top:10px">
+              ${(v.parts_need || [])
+                .map(
+                  (p, i) => `
+                <div class="item">
+                  <div class="row" style="justify-content:space-between;align-items:center">
+                    <div>${esc(p)}</div>
+                    <button class="btn danger" onclick="removePart('${v.id}','need',${i})">x</button>
+                  </div>
+                </div>
+              `
+                )
+                .join("")}
+            </div>
+
+            <div class="hr"></div>
+
+            <label class="muted">Vorhanden</label>
+            <div class="row">
+              <input class="input" id="haveInput" placeholder="z.B. Zündkerze neu" />
+              <button class="btn primary" onclick="addPart('${v.id}','have')">+</button>
+            </div>
+            <div class="list" style="margin-top:10px">
+              ${(v.parts_have || [])
+                .map(
+                  (p, i) => `
+                <div class="item">
+                  <div class="row" style="justify-content:space-between;align-items:center">
+                    <div>${esc(p)}</div>
+                    <button class="btn danger" onclick="removePart('${v.id}','have',${i})">x</button>
+                  </div>
+                </div>
+              `
+                )
+                .join("")}
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  async function saveNotes(vehicleId) {
+    const notes = ($("#notes").value || "").toString();
+    const { error } = await sb.from("vehicles").update({ notes }).eq("id", vehicleId);
+    if (error) return alert("Fehler: " + error.message);
+    route();
+  }
+
+  async function addImage(vehicleId) {
+    const url = ($("#imgUrl").value || "").trim();
+    if (!url) return;
+
+    const { data: v, error: e1 } = await sb.from("vehicles").select("images").eq("id", vehicleId).single();
+    if (e1) return alert(e1.message);
+
+    const images = [...(v.images || []), url];
+    const { error: e2 } = await sb.from("vehicles").update({ images }).eq("id", vehicleId);
+    if (e2) return alert(e2.message);
+
+    route();
+  }
+
+  async function removeImage(vehicleId, idx) {
+    const { data: v, error: e1 } = await sb.from("vehicles").select("images").eq("id", vehicleId).single();
+    if (e1) return alert(e1.message);
+
+    const images = (v.images || []).slice();
+    images.splice(idx, 1);
+
+    const { error: e2 } = await sb.from("vehicles").update({ images }).eq("id", vehicleId);
+    if (e2) return alert(e2.message);
+
+    route();
+  }
+
+  async function addTransaction(vehicleId) {
+    const type = $("#t_type").value;
+    const amount = Number($("#t_amount").value);
+    const date = $("#t_date").value;
+    const category = ($("#t_cat").value || "").trim();
+    const description = ($("#t_desc").value || "").trim();
+
+    if (!amount || amount <= 0) return alert("Betrag muss > 0 sein.");
+    if (!date) return alert("Datum fehlt.");
+
+    const { error } = await sb.from("transactions").insert({
+      vehicle_id: vehicleId,
+      type,
+      amount,
+      date,
+      category,
+      description,
+      created_by: sessionUser.id,
     });
+
+    if (error) return alert("Fehler: " + error.message);
+    route();
   }
 
-  boot();
+  async function removeTransaction(transactionId, vehicleId) {
+    const { error } = await sb.from("transactions").delete().eq("id", transactionId);
+    if (error) return alert("Fehler: " + error.message);
+    location.hash = `#/vehicle/${vehicleId}`;
+    route();
+  }
+
+  async function addPart(vehicleId, which) {
+    const inputId = which === "need" ? "needInput" : "haveInput";
+    const txt = ($("#" + inputId).value || "").trim();
+    if (!txt) return;
+
+    const col = which === "need" ? "parts_need" : "parts_have";
+
+    const { data: v, error: e1 } = await sb.from("vehicles").select(col).eq("id", vehicleId).single();
+    if (e1) return alert(e1.message);
+
+    const arr = [...(v[col] || []), txt];
+    const { error: e2 } = await sb.from("vehicles").update({ [col]: arr }).eq("id", vehicleId);
+    if (e2) return alert(e2.message);
+
+    route();
+  }
+
+  async function removePart(vehicleId, which, idx) {
+    const col = which === "need" ? "parts_need" : "parts_have";
+
+    const { data: v, error: e1 } = await sb.from("vehicles").select(col).eq("id", vehicleId).single();
+    if (e1) return alert(e1.message);
+
+    const arr = (v[col] || []).slice();
+    arr.splice(idx, 1);
+
+    const { error: e2 } = await sb.from("vehicles").update({ [col]: arr }).eq("id", vehicleId);
+    if (e2) return alert(e2.message);
+
+    route();
+  }
+
+  /* ---------- Todos (global) ---------- */
+  async function addTodo() {
+    const text = ($("#todoText").value || "").trim();
+    if (!text) return;
+
+    const { error } = await sb.from("todos").insert({ text, done: false, created_by: sessionUser.id });
+    if (error) return alert("Fehler: " + error.message);
+    route();
+  }
+
+  async function toggleTodo(id, currentlyDone) {
+    const { error } = await sb.from("todos").update({ done: !currentlyDone }).eq("id", id);
+    if (error) return alert("Fehler: " + error.message);
+    route();
+  }
+
+  async function deleteTodo(id) {
+    const { error } = await sb.from("todos").delete().eq("id", id);
+    if (error) return alert("Fehler: " + error.message);
+    route();
+  }
+
+  async function clearDoneTodos() {
+    const { error } = await sb.from("todos").delete().eq("done", true);
+    if (error) return alert("Fehler: " + error.message);
+    route();
+  }
+
+  /* ---------- Expose functions for onclick ---------- */
+  Object.assign(window, {
+    logout,
+    quickAddVehicle,
+    addVehicle,
+    deleteVehicle,
+    saveNotes,
+    addImage,
+    removeImage,
+    addTransaction,
+    removeTransaction,
+    addPart,
+    removePart,
+    addTodo,
+    toggleTodo,
+    deleteTodo,
+    clearDoneTodos,
+  });
+
+  /* ---------- Boot ---------- */
+  (async function init() {
+    const { data, error } = await sb.auth.getSession();
+    if (error) return fatal("Supabase Session Error", error.message);
+
+    sessionUser = data.session?.user || null;
+
+    sb.auth.onAuthStateChange(async (_event, sess) => {
+      sessionUser = sess?.user || null;
+      if (sessionUser) await refreshAll();
+      route();
+    });
+
+    if (sessionUser) await refreshAll();
+    route();
+  })();
 })();
