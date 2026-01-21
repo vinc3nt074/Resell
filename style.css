@@ -159,3 +159,4 @@ textarea{min-height:110px;resize:vertical}
 @media (min-width: 860px){
   .split{grid-template-columns: 1fr 1fr;}
 }
+
