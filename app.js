@@ -56,7 +56,7 @@
   /* ===================== Allowlist (safe) ===================== */
   // Set this to true if you REALLY want to enforce allowlist.
   // If true and list is empty OR your email not included -> you get blocked.
-  const ALLOWLIST_ENABLED = true;
+  const ALLOWLIST_ENABLED = false;
 
   // IMPORTANT: put your REAL login emails here (lowercase!)
   const ALLOWED_EMAILS = new Set([
